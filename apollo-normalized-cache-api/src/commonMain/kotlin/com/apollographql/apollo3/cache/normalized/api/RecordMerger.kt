@@ -40,10 +40,12 @@ object DefaultRecordMerger : RecordMerger {
 
 @ApolloExperimental
 class FieldRecordMerger(private val fieldMerger: FieldMerger) : RecordMerger {
+  @ApolloExperimental
   interface FieldMerger {
     fun mergeFields(existing: FieldInfo, incoming: FieldInfo): FieldInfo
   }
 
+  @ApolloExperimental
   data class FieldInfo(
       val value: Any?,
       val arguments: Map<String, Any?> = emptyMap(),
