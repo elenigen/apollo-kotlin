@@ -3,12 +3,11 @@ package pagination
 import com.apollographql.apollo3.ApolloClient
 import com.apollographql.apollo3.api.Optional
 import com.apollographql.apollo3.cache.normalized.api.FieldPolicyApolloResolver
+import com.apollographql.apollo3.cache.normalized.api.FieldRecordMerger
 import com.apollographql.apollo3.cache.normalized.api.MemoryCacheFactory
 import com.apollographql.apollo3.cache.normalized.api.MetadataGenerator
 import com.apollographql.apollo3.cache.normalized.api.MetadataGeneratorContext
 import com.apollographql.apollo3.cache.normalized.api.NormalizedCacheFactory
-import com.apollographql.apollo3.cache.normalized.api.Record
-import com.apollographql.apollo3.cache.normalized.api.RecordMerger
 import com.apollographql.apollo3.cache.normalized.api.TypePolicyCacheKeyGenerator
 import com.apollographql.apollo3.cache.normalized.apolloStore
 import com.apollographql.apollo3.cache.normalized.normalizedCache
@@ -42,7 +41,7 @@ class OffsetBasedWithArrayPaginationTest {
             cacheKeyGenerator = TypePolicyCacheKeyGenerator,
             metadataGenerator = OffsetPaginationMetadataGenerator("usersOffsetBasedWithArray"),
             apolloResolver = FieldPolicyApolloResolver,
-            recordMerger = OffsetPaginationRecordMerger()
+            recordMerger = FieldRecordMerger(OffsetPaginationFieldMerger())
         )
         .serverUrl("unused")
         .build()
@@ -112,7 +111,6 @@ class OffsetBasedWithArrayPaginationTest {
     assertEquals(expectedData, dataFromStore)
   }
 
-  @Suppress("UNCHECKED_CAST")
   private class OffsetPaginationMetadataGenerator(private val fieldName: String) : MetadataGenerator {
     override fun metadataForObject(obj: Any?, context: MetadataGeneratorContext): Map<String, Any?> {
       if (context.field.name == fieldName) {
@@ -124,46 +122,22 @@ class OffsetBasedWithArrayPaginationTest {
     }
   }
 
-  @Suppress("UNCHECKED_CAST")
-  private class OffsetPaginationRecordMerger : RecordMerger {
-    override fun merge(existing: Record, incoming: Record, newDate: Long?): Pair<Record, Set<String>> {
-      val changedKeys = mutableSetOf<String>()
-      val mergedFields = existing.fields.toMutableMap()
-      val mergedMetadata = existing.metadata.toMutableMap()
-      val date = existing.date?.toMutableMap() ?: mutableMapOf()
-
-      for ((fieldKey, incomingFieldValue) in incoming.fields) {
-        val hasExistingFieldValue = existing.fields.containsKey(fieldKey)
-        val existingFieldValue = existing.fields[fieldKey]
-        if (!hasExistingFieldValue || existingFieldValue != incomingFieldValue) {
-          val existingOffset = existing.metadata[fieldKey]!!["offset"] as? Int
-          val incomingOffset = incoming.arguments[fieldKey]!!["offset"] as? Int
-          if (existingOffset == null || incomingOffset == null) {
-            mergedFields[fieldKey] = incomingFieldValue
-            mergedMetadata[fieldKey] = incoming.metadata[fieldKey] as Map<String, Any?>
-          } else {
-            val existingList = existing[fieldKey] as List<*>
-            val incomingList = incomingFieldValue as List<*>
-            val mergedList = mergeLists(existingList, incomingList, existingOffset, incomingOffset)
-            mergedFields[fieldKey] = mergedList
-            mergedMetadata[fieldKey] = mapOf("offset" to min(existingOffset, incomingOffset))
-          }
-          changedKeys.add("${existing.key}.$fieldKey")
-        }
-        // Even if the value did not change update date
-        if (newDate != null) {
-          date[fieldKey] = newDate
-        }
+  private class OffsetPaginationFieldMerger : FieldRecordMerger.FieldMerger {
+    override fun mergeFields(existing: FieldRecordMerger.FieldInfo, incoming: FieldRecordMerger.FieldInfo): FieldRecordMerger.FieldInfo {
+      val existingOffset = existing.metadata["offset"] as? Int
+      val incomingOffset = incoming.arguments["offset"] as? Int
+      return if (existingOffset == null || incomingOffset == null) {
+        incoming
+      } else {
+        val existingList = existing.value as List<*>
+        val incomingList = incoming.value as List<*>
+        val mergedList = mergeLists(existingList, incomingList, existingOffset, incomingOffset)
+        val mergedMetadata = mapOf("offset" to min(existingOffset, incomingOffset))
+        FieldRecordMerger.FieldInfo(
+            value = mergedList,
+            metadata = mergedMetadata
+        )
       }
-
-      return Record(
-          key = existing.key,
-          fields = mergedFields,
-          mutationId = incoming.mutationId,
-          date = date,
-          arguments = existing.arguments + incoming.arguments,
-          metadata = mergedMetadata,
-      ) to changedKeys
     }
 
     private fun <T> mergeLists(existing: List<T>, incoming: List<T>, existingOffset: Int, incomingOffset: Int): List<T> {
